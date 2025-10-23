@@ -1,0 +1,52 @@
+{
+  "eula": "",
+  "vendor": "SAP",
+  "license": "",
+  "id": "com.sap.sac.sample.plotly.sunburst",
+  "name": "PlotlySunburst",
+  "description": "Sunburst chart built with Plotly.js",
+  "version": "1.0.0",
+  "supportsMobile": true,
+  "webcomponents": [
+    {
+      "kind": "main",
+      "tag": "com-sap-sac-sample-plotly-sunburst",
+      "url": "/main.js",
+      "ignoreIntegrity": true
+    },
+    {
+      "kind": "styling",
+      "tag": "com-sap-sac-sample-plotly-sunburst-styling",
+      "url": "/styling.js",
+      "ignoreIntegrity": true
+    }
+  ],
+  "properties": {
+    "branchValues": {
+      "type": "string",
+      "default": "total"
+    },
+    "maxDepth": {
+      "type": "integer",
+      "default": 0
+    }
+  },
+  "dataBindings": {
+    "dataBinding": {
+      "feeds": [
+        {
+          "id": "dimensions",
+          "description": "Hierarchy Levels",
+          "type": "dimension"
+        },
+        {
+          "id": "measures",
+          "description": "Values",
+          "type": "mainStructureMember"
+        }
+      ]
+    }
+  },
+  "events": {},
+  "methods": {}
+}
