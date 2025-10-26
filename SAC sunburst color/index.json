@@ -1,0 +1,24 @@
+{
+  "id": "com.sree.sac.sunburst",
+  "version": "1.0.0",
+  "name": "Sunburst (Plotly)",
+  "newInstancePrefix": "Sunburst",
+  "description": "Sunburst visualization using Plotly with max-depth control.",
+  "vendor": "SREE",
+  "webcomponents": [
+    { "kind": "main", "tag": "com-sree-sac-sunburst", "url": "/main.js" },
+    { "kind": "styling", "tag": "com-sree-sac-sunburst-styling", "url": "/styling.js" }
+  ],
+  "properties": {
+    "showLabels": { "type": "boolean", "default": true },
+    "maxDepth":   { "type": "integer", "default": 4 }
+  },
+  "dataBindings": {
+    "dataBinding": {
+      "feeds": [
+        { "id": "dimensions", "description": "Dimensions", "type": "dimension" },
+        { "id": "measures",   "description": "Measures",   "type": "mainStructureMember" }
+      ]
+    }
+  }
+}
