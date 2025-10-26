@@ -13,6 +13,9 @@
   const log  = (...a) => DEBUG && console.log (`[SunburstDebug ${T()}ms]`, ...a);
   const warn = (...a) => DEBUG && console.warn(`[SunburstDebug ${T()}ms]`, ...a);
 
+  // ready states we treat as “good to render”
+  const READY = new Set(["success", "ready", "loaded", undefined]);
+
   class SunburstDebug extends HTMLElement {
     constructor() {
       super();
@@ -21,9 +24,10 @@
       this._el = this.shadowRoot.getElementById("chart");
 
       this._props = { showLabels: true, maxDepth: 0 };
-      this._binding = null;          // latest binding from SAC (may be "loading")
-      this._lastGoodBinding = null;  // cached usable binding
-      this._loadingSince = 0;
+      this._binding = null;           // latest SAC payload (may be "loading")
+      this._lastGoodBinding = null;   // deep-cloned successful payload
+      this._loadingSince = 0;         // for on-screen timer
+      this._renderTimer = null;       // debounce handle
 
       // Dynamically load Plotly (JSON-upload safe)
       if (!window.Plotly) {
@@ -41,37 +45,57 @@
     onCustomWidgetDestroy() {}
 
     onCustomWidgetAfterUpdate(changed) {
-      if (changed.properties) Object.assign(this._props, changed.properties);
+      if (changed.properties) {
+        Object.assign(this._props, changed.properties);
+        log("PROPS", this._props);
+        this._scheduleRender("props");
+      }
 
       if (changed.dataBinding) {
         this._binding = changed.dataBinding;
 
-        // State info & caching
+        // log state + quick stats
         const st = this._binding?.state;
         const rowsLen = Array.isArray(this._binding?.data) ? this._binding.data.length : 0;
         log("STATE", st, "• rows=", rowsLen);
 
-        const looksReady = (st === "success" || st === "ready" || st === "loaded" || st === undefined);
+        // cache a deep-cloned snapshot ONLY when ready/has rows
+        const looksReady = READY.has(st);
         const hasRows   = rowsLen > 0;
 
-        if (looksReady || hasRows) {
-          this._lastGoodBinding = this._binding;
-          log("CACHED good binding");
+        if (looksReady && hasRows) {
+          try {
+            // deep clone to avoid later mutations overwriting our good snapshot
+            this._lastGoodBinding = JSON.parse(JSON.stringify(this._binding));
+            log("CACHED good binding (deep clone)");
+          } catch {
+            // as a fallback keep a reference
+            this._lastGoodBinding = this._binding;
+            warn("Failed deep clone; using reference snapshot");
+          }
         } else {
           log("Not caching (transient state)");
         }
 
-        // Pretty-print binding once per update
-        try { log("dataBinding:", JSON.parse(JSON.stringify(this._binding))); }
-        catch { log("dataBinding (raw):", this._binding); }
-      }
+        try { log("dataBinding", JSON.parse(JSON.stringify(this._binding))); }
+        catch { log("dataBinding (raw)", this._binding); }
 
-      this.render();
+        this._scheduleRender("data");
+      }
+    }
+
+    // ---------- Debounced render ----------
+    _scheduleRender(reason) {
+      if (this._renderTimer) cancelAnimationFrame(this._renderTimer);
+      this._renderTimer = requestAnimationFrame(() => {
+        this._renderTimer = null;
+        this.render(reason);
+      });
     }
 
     // ---------- Rendering ----------
-    render() {
-      // Prefer last good binding (prevents “stuck loading”)
+    render(reason = "unknown") {
+      // Prefer last good snapshot to avoid getting stuck on "loading"
       const binding = this._lastGoodBinding ?? this._binding;
 
       if (!binding) {
@@ -81,17 +105,15 @@
       }
 
       const st = binding.state;
-      const looksReady = (st === "success" || st === "ready" || st === "loaded" || st === undefined);
+      const looksReady = READY.has(st);
 
       if (!looksReady && !this._lastGoodBinding) {
-        // Watchdog UI for early/slow loads
+        // only show loading when we don't yet have a good snapshot
         if (!this._loadingSince) this._loadingSince = performance.now();
         const ms = performance.now() - this._loadingSince;
-        log("RENDER BLOCKED: state=", st, "and no cached data");
+        log("RENDER BLOCKED:", { reason: "loading", st, sinceMs: ms.toFixed(0) });
         this._el.innerHTML =
-          `<p style="text-align:center;color:#999;">
-             Loading data… (${Math.round(ms/1000)}s)
-           </p>`;
+          `<p style="text-align:center;color:#999;">Loading data… (${Math.round(ms/1000)}s)</p>`;
         return;
       } else {
         this._loadingSince = 0;
@@ -105,7 +127,7 @@
         return;
       }
 
-      // Build hierarchy
+      // Build hierarchy (ids are full paths to keep uniqueness)
       const sep = "↳";
       const map = new Map();
       const ensure = (path) => {
@@ -137,11 +159,11 @@
         ids.push(n.id);
       }
 
-      log("TRACE stats:", { nodes: ids.length, sum: values.reduce((a,b)=>a+b,0), maxDepth: this._props.maxDepth });
+      log("TRACE stats:", { nodes: ids.length, sum: values.reduce((a,b)=>a+b,0), reason, maxDepth: this._props.maxDepth });
 
       if (!window.Plotly) {
         log("WAITING for Plotly, will retry");
-        setTimeout(() => this.render(), 80);
+        setTimeout(() => this._scheduleRender("plotly-wait"), 80);
         return;
       }
 
@@ -152,8 +174,9 @@
         marker: { line: { color: "#fff", width: 1 } },
         textinfo: this._props.showLabels ? "label+value" : "none"
       };
+
       const md = Number(this._props.maxDepth);
-      if (Number.isFinite(md) && md > 0) trace.maxdepth = md;
+      trace.maxdepth = (Number.isFinite(md) && md > 0) ? md : undefined; // 0/NaN => auto
 
       const layout = {
         margin: { l: 10, r: 10, t: 10, b: 10 },
@@ -170,7 +193,7 @@
         .catch(err => warn("RENDER ERROR:", err));
     }
 
-    // ---------- Binding normalizer (for dimensions_*/measures_* rows) ----------
+    // ---------- Binding normalizer (dimensions_* / measures_* rows) ----------
     _normalizeBinding(db) {
       if (!Array.isArray(db.data) || !db.data.length) {
         warn("NORMALIZE: no rows in binding.data");
@@ -181,25 +204,30 @@
       let dimCount = 0;
 
       for (const r of db.data) {
-        const dims = [];
-        let val = 0;
+        // sort dimension keys by numeric suffix to keep order stable
+        const dimKeys = Object.keys(r)
+          .filter(k => k.startsWith("dimensions_"))
+          .sort((a,b) => parseInt(a.split("_")[1]||"0",10) - parseInt(b.split("_")[1]||"0",10));
 
-        for (const k of Object.keys(r)) {
-          if (k.startsWith("dimensions_")) {
-            const v = r[k];
-            if (v && typeof v === "object") dims.push(v.label ?? v.id ?? "");
-          } else if (k.startsWith("measures_")) {
-            const m = r[k];
-            if (m && typeof m === "object") {
-              // Prefer raw; fallback to formatted (strip non-numeric: €, commas, spaces)
-              let n = Number(m.raw);
-              if (!Number.isFinite(n)) {
-                const cleaned = String(m.formatted ?? "").replace(/[^\d.\-]/g, "");
-                n = parseFloat(cleaned);
-              }
-              if (!Number.isFinite(n)) n = 0;
-              val = n;
+        const dims = dimKeys.map(k => {
+          const v = r[k];
+          return (v && typeof v === "object") ? (v.label ?? v.id ?? "") : String(v ?? "");
+        });
+
+        // choose first measure_* and parse robustly
+        const mKey = Object.keys(r).filter(k => k.startsWith("measures_"))
+          .sort((a,b) => parseInt(a.split("_")[1]||"0",10) - parseInt(b.split("_")[1]||"0",10))[0];
+
+        let val = 0;
+        if (mKey) {
+          const m = r[mKey];
+          if (m && typeof m === "object") {
+            let n = Number(m.raw);
+            if (!Number.isFinite(n)) {
+              const cleaned = String(m.formatted ?? "").replace(/[^\d.\-]/g, "");
+              n = parseFloat(cleaned);
             }
+            if (Number.isFinite(n)) val = n;
           }
         }
 
@@ -228,6 +256,6 @@
     }
   }
 
-  // Tag must match index.json - Version 6
+  // tag must match your index.json Version - 7
   customElements.define("com-sree-sac-sunburst-debug", SunburstDebug);
 })();
