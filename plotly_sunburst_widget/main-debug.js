@@ -1,5 +1,6 @@
 (function () {
-  let template = document.createElement("template");
+  // --- Template --------------------------------------------------------------
+  const template = document.createElement("template");
   template.innerHTML = `
     <style>:host { display:block; width:100%; height:100%; }</style>
     <div id="chart"></div>
@@ -12,87 +13,157 @@
       this.shadowRoot.appendChild(template.content.cloneNode(true));
       this._plot = this.shadowRoot.getElementById("chart");
       this._props = { showLabels: true, maxDepth: 0 };
+      this._dataBinding = null;
 
-      // ✅ dynamically load Plotly
+      // ✅ Dynamically load Plotly (ZIP/JSON manifest safe)
       if (!window.Plotly) {
         const s = document.createElement("script");
         s.src = "https://cdn.plot.ly/plotly-2.35.2.min.js";
+        s.async = true;
         s.onload = () => console.log("[SunburstDebug] Plotly loaded");
         document.head.appendChild(s);
       }
     }
 
-    // Lifecycle hooks
+    // --- SAC lifecycle hooks -------------------------------------------------
     onCustomWidgetBeforeUpdate() {}
-    onCustomWidgetResize() {}
+    onCustomWidgetResize() { this.render(); }
     onCustomWidgetDestroy() {}
 
     onCustomWidgetAfterUpdate(changedProps) {
       if (changedProps.properties) Object.assign(this._props, changedProps.properties);
-      if (changedProps.dataBinding) this._dataBinding = changedProps.dataBinding;
+      if (changedProps.dataBinding) {
+        this._dataBinding = changedProps.dataBinding;
+        // Helpful for debugging what SAC actually sends:
+        try {
+          console.log("[SunburstDebug] dataBinding:", JSON.parse(JSON.stringify(this._dataBinding)));
+        } catch (e) {
+          console.log("[SunburstDebug] dataBinding (raw):", this._dataBinding);
+        }
+      }
       this.render();
     }
 
+    // --- Rendering -----------------------------------------------------------
     render() {
-      if (!this._dataBinding || !this._dataBinding.data) {
+      // If no data yet
+      if (!this._dataBinding) {
         this._plot.innerHTML = "<p style='text-align:center;color:#999;'>Bind data to render</p>";
         return;
       }
 
-      const db = this._dataBinding;
-      const dims = db.dimensions.map(d => d.id);
-      const measure = db.measures[0].id;
+      // Normalize to { rows:[{}], dimIds:[...], measureId:"..." }
+      const model = this._normalizeBinding(this._dataBinding);
+      if (!model || !model.rows?.length || !model.dimIds?.length || !model.measureId) {
+        console.warn("[SunburstDebug] Unusable binding model:", model);
+        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>No rows or unknown binding format</p>";
+        return;
+      }
+
+      // Build hierarchy
       const sep = "↳";
-      const nodeMap = new Map();
-      const ensure = arr => {
+      const map = new Map();
+      const ensure = (arr) => {
         const id = arr.join(sep);
-        if (!nodeMap.has(id)) {
+        if (!map.has(id)) {
           const label = arr[arr.length - 1] || "Total";
           const parent = arr.length <= 1 ? "" : arr.slice(0, -1).join(sep);
-          nodeMap.set(id, { id, label, parent, val: 0 });
+          map.set(id, { id, label, parent, val: 0 });
         }
-        return nodeMap.get(id);
+        return map.get(id);
       };
+
       ensure(["Total"]);
-      for (const row of db.data) {
-        const dvals = dims.map(h => String(row[h] ?? "(blank)"));
-        const v = Number(row[measure]) || 0;
+      for (const row of model.rows) {
+        const dims = model.dimIds.map(h => String(row[h] ?? "(blank)"));
+        const v = Number(row[model.measureId]) || 0;
         let p = ["Total"];
         ensure(p).val += v;
-        for (const d of dvals) {
+        for (const d of dims) {
           p = [...p, d];
           ensure(p).val += v;
         }
       }
 
+      // Plotly arrays
       const labels = [], parents = [], values = [], ids = [];
-      for (const [, n] of nodeMap) {
+      for (const [, n] of map) {
         labels.push(n.label);
         parents.push(n.parent);
         values.push(n.val);
         ids.push(n.id);
       }
 
+      // Wait for Plotly if still loading
       if (!window.Plotly) {
-        console.warn("Plotly not loaded yet, retrying...");
-        setTimeout(() => this.render(), 100);
+        setTimeout(() => this.render(), 80);
         return;
       }
 
-      Plotly.react(this._plot, [{
+      // Trace & layout
+      const trace = {
         type: "sunburst",
         labels, parents, values, ids,
         branchvalues: "total",
         marker: { line: { color: "#fff", width: 1 } },
-        textinfo: this._props.showLabels ? "label+value" : "none",
-        maxdepth: this._props.maxDepth || null
-      }], {
+        textinfo: this._props.showLabels ? "label+value" : "none"
+      };
+      const layout = {
         margin: { l: 10, r: 10, t: 10, b: 10 },
-        sunburstcolorway: ["#636efa","#EF553B","#00cc96","#ab63fa","#FFA15A","#19d3f3","#FF6692"],
+        sunburstcolorway: [
+          "#636efa","#EF553B","#00cc96","#ab63fa",
+          "#FFA15A","#19d3f3","#FF6692","#B6E880",
+          "#FF97FF","#FECB52"
+        ],
         extendsunburstcolors: true
-      }, { displayModeBar: false });
+      };
+      if (Number(this._props.maxDepth) > 0) trace.maxdepth = Number(this._props.maxDepth);
+
+      Plotly.react(this._plot, [trace], layout, { displayModeBar: false, responsive: true });
+    }
+
+    /** Normalize SAC dataBinding to a common shape:
+     *  returns { rows:[object], dimIds:[string], measureId:string }
+     */
+    _normalizeBinding(db) {
+      // Case A: Simple object-row binding
+      if (db.dimensions?.length && db.measures?.length && Array.isArray(db.data)) {
+        if (db.data.length && typeof db.data[0] === "object" && !Array.isArray(db.data[0])) {
+          return {
+            rows: db.data,
+            dimIds: db.dimensions.map(d => d.id ?? d.name ?? d.key).filter(Boolean),
+            measureId: (db.measures[0].id ?? db.measures[0].name ?? db.measures[0].key)
+          };
+        }
+      }
+
+      // Case B: metadata format with object rows
+      if (db.metadata?.dimensions?.length && db.metadata?.measures?.length && Array.isArray(db.data)) {
+        const dimIds = db.metadata.dimensions.map(d => d.id ?? d.name ?? d.key).filter(Boolean);
+        const measureId = (db.metadata.measures[0]?.id ?? db.metadata.measures[0]?.name ?? db.metadata.measures[0]?.key);
+        if (!dimIds.length || !measureId) return null;
+
+        if (db.data.length && typeof db.data[0] === "object" && !Array.isArray(db.data[0])) {
+          return { rows: db.data, dimIds, measureId };
+        }
+
+        // Case C: metadata + array rows → map to objects
+        if (db.data.length && Array.isArray(db.data[0])) {
+          const headers = [...dimIds, measureId];
+          const rows = db.data.map(arr => {
+            const o = {};
+            for (let i = 0; i < headers.length && i < arr.length; i++) o[headers[i]] = arr[i];
+            return o;
+          });
+          return { rows, dimIds, measureId };
+        }
+      }
+
+      console.warn("[SunburstDebug] Unhandled binding shape:", db);
+      return null;
     }
   }
 
+  // IMPORTANT: tag must match `index.json` "tag"
   customElements.define("com-sree-sac-sunburst-debug", SunburstDebug);
 })();
