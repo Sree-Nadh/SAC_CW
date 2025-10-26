@@ -1,5 +1,5 @@
 (function () {
-  let tmpl = document.createElement("template");
+  const tmpl = document.createElement("template");
   tmpl.innerHTML = `
     <style>:host{display:block;padding:8px;font:12px system-ui,sans-serif}</style>
     <div>
@@ -25,12 +25,12 @@
       this.shadowRoot.getElementById("apply").addEventListener("click", () => {
         const props = {
           showLabels: this.shadowRoot.getElementById("labels").checked,
-          maxDepth: Number(this.shadowRoot.getElementById("depth").value || 0)
+          maxDepth: Number(this.shadowRoot.getElementById("depth").value || 0) // 0 => auto
         };
         this.dispatchEvent(new CustomEvent("propertiesChanged", { detail: { properties: props } }));
       });
     }
   }
-
+// Version 2
   customElements.define("com-sree-sac-sunburst-debug-styling", Styling);
 })();
