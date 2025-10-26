@@ -1,5 +1,4 @@
 (function () {
-  // --- Template --------------------------------------------------------------
   const template = document.createElement("template");
   template.innerHTML = `
     <style>:host { display:block; width:100%; height:100%; }</style>
@@ -15,7 +14,6 @@
       this._props = { showLabels: true, maxDepth: 0 };
       this._dataBinding = null;
 
-      // ✅ Dynamically load Plotly (ZIP/JSON manifest safe)
       if (!window.Plotly) {
         const s = document.createElement("script");
         s.src = "https://cdn.plot.ly/plotly-2.35.2.min.js";
@@ -25,38 +23,47 @@
       }
     }
 
-    // --- SAC lifecycle hooks -------------------------------------------------
+    // --- SAC lifecycle ---
     onCustomWidgetBeforeUpdate() {}
     onCustomWidgetResize() { this.render(); }
     onCustomWidgetDestroy() {}
 
     onCustomWidgetAfterUpdate(changedProps) {
-      if (changedProps.properties) Object.assign(this._props, changedProps.properties);
+      if (changedProps.properties)
+        Object.assign(this._props, changedProps.properties);
+
       if (changedProps.dataBinding) {
         this._dataBinding = changedProps.dataBinding;
-        // Helpful for debugging what SAC actually sends:
         try {
           console.log("[SunburstDebug] dataBinding:", JSON.parse(JSON.stringify(this._dataBinding)));
         } catch (e) {
           console.log("[SunburstDebug] dataBinding (raw):", this._dataBinding);
         }
       }
+
       this.render();
     }
 
-    // --- Rendering -----------------------------------------------------------
+    // --- Rendering logic ---
     render() {
-      // If no data yet
+      // No binding at all
       if (!this._dataBinding) {
         this._plot.innerHTML = "<p style='text-align:center;color:#999;'>Bind data to render</p>";
         return;
       }
 
-      // Normalize to { rows:[{}], dimIds:[...], measureId:"..." }
+      // Skip if SAC is still loading data
+      if (this._dataBinding.state && this._dataBinding.state !== "success") {
+        console.log("[SunburstDebug] Waiting for data, current state:", this._dataBinding.state);
+        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>Loading data...</p>";
+        return;
+      }
+
+      // Normalize SAC binding to usable format
       const model = this._normalizeBinding(this._dataBinding);
       if (!model || !model.rows?.length || !model.dimIds?.length || !model.measureId) {
         console.warn("[SunburstDebug] Unusable binding model:", model);
-        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>No rows or unknown binding format</p>";
+        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>No data or unknown format</p>";
         return;
       }
 
@@ -85,7 +92,7 @@
         }
       }
 
-      // Plotly arrays
+      // Convert to Plotly arrays
       const labels = [], parents = [], values = [], ids = [];
       for (const [, n] of map) {
         labels.push(n.label);
@@ -94,13 +101,12 @@
         ids.push(n.id);
       }
 
-      // Wait for Plotly if still loading
       if (!window.Plotly) {
-        setTimeout(() => this.render(), 80);
+        console.log("[SunburstDebug] Waiting for Plotly...");
+        setTimeout(() => this.render(), 100);
         return;
       }
 
-      // Trace & layout
       const trace = {
         type: "sunburst",
         labels, parents, values, ids,
@@ -108,6 +114,7 @@
         marker: { line: { color: "#fff", width: 1 } },
         textinfo: this._props.showLabels ? "label+value" : "none"
       };
+
       const layout = {
         margin: { l: 10, r: 10, t: 10, b: 10 },
         sunburstcolorway: [
@@ -117,37 +124,41 @@
         ],
         extendsunburstcolors: true
       };
-      if (Number(this._props.maxDepth) > 0) trace.maxdepth = Number(this._props.maxDepth);
 
-      Plotly.react(this._plot, [trace], layout, { displayModeBar: false, responsive: true });
+      if (Number(this._props.maxDepth) > 0)
+        trace.maxdepth = Number(this._props.maxDepth);
+
+      Plotly.react(this._plot, [trace], layout, {
+        displayModeBar: false,
+        responsive: true
+      });
     }
 
-    /** Normalize SAC dataBinding to a common shape:
-     *  returns { rows:[object], dimIds:[string], measureId:string }
-     */
+    // --- Binding Normalizer ---
     _normalizeBinding(db) {
-      // Case A: Simple object-row binding
+      // Simple format: top-level dimensions + measures + data
       if (db.dimensions?.length && db.measures?.length && Array.isArray(db.data)) {
         if (db.data.length && typeof db.data[0] === "object" && !Array.isArray(db.data[0])) {
           return {
             rows: db.data,
             dimIds: db.dimensions.map(d => d.id ?? d.name ?? d.key).filter(Boolean),
-            measureId: (db.measures[0].id ?? db.measures[0].name ?? db.measures[0].key)
+            measureId: db.measures[0].id ?? db.measures[0].name ?? db.measures[0].key
           };
         }
       }
 
-      // Case B: metadata format with object rows
+      // Metadata format
       if (db.metadata?.dimensions?.length && db.metadata?.measures?.length && Array.isArray(db.data)) {
         const dimIds = db.metadata.dimensions.map(d => d.id ?? d.name ?? d.key).filter(Boolean);
-        const measureId = (db.metadata.measures[0]?.id ?? db.metadata.measures[0]?.name ?? db.metadata.measures[0]?.key);
+        const measureId = db.metadata.measures[0]?.id ?? db.metadata.measures[0]?.name ?? db.metadata.measures[0]?.key;
         if (!dimIds.length || !measureId) return null;
 
+        // Object rows
         if (db.data.length && typeof db.data[0] === "object" && !Array.isArray(db.data[0])) {
           return { rows: db.data, dimIds, measureId };
         }
 
-        // Case C: metadata + array rows → map to objects
+        // Array rows
         if (db.data.length && Array.isArray(db.data[0])) {
           const headers = [...dimIds, measureId];
           const rows = db.data.map(arr => {
@@ -163,7 +174,6 @@
       return null;
     }
   }
-
-  // IMPORTANT: tag must match `index.json` "tag"
+//Version 3
   customElements.define("com-sree-sac-sunburst-debug", SunburstDebug);
 })();
