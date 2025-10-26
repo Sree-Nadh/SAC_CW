@@ -23,7 +23,7 @@
       this.shadowRoot.appendChild(template.content.cloneNode(true));
       this._el = this.shadowRoot.getElementById("chart");
 
-      this._props = { showLabels: true, maxDepth: 0 };
+      this._props = { showLabels: true, maxDepth: 4 };
       this._binding = null;           // latest SAC payload (may be "loading")
       this._lastGoodBinding = null;   // deep-cloned successful payload
       this._loadingSince = 0;         // for on-screen timer
@@ -256,6 +256,6 @@
     }
   }
 
-  // tag must match your index.json Version - 7
+  // tag must match your index.json Version - 8
   customElements.define("com-sree-sac-sunburst-debug", SunburstDebug);
 })();
