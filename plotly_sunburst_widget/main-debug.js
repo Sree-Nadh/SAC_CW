@@ -2,7 +2,7 @@
   const template = document.createElement("template");
   template.innerHTML = `
     <style>:host { display:block; width:100%; height:100%; }</style>
-    <div id="chart"></div>
+    <div id="chart" style="width:100%;height:100%"></div>
   `;
 
   class SunburstDebug extends HTMLElement {
@@ -10,10 +10,11 @@
       super();
       this.attachShadow({ mode: "open" });
       this.shadowRoot.appendChild(template.content.cloneNode(true));
-      this._plot = this.shadowRoot.getElementById("chart");
+      this._el = this.shadowRoot.getElementById("chart");
       this._props = { showLabels: true, maxDepth: 0 };
-      this._dataBinding = null;
+      this._binding = null;
 
+      // Load Plotly dynamically (JSON-upload safe)
       if (!window.Plotly) {
         const s = document.createElement("script");
         s.src = "https://cdn.plot.ly/plotly-2.35.2.min.js";
@@ -24,69 +25,60 @@
     }
 
     onCustomWidgetBeforeUpdate() {}
-    onCustomWidgetResize() { this.render(); }
+    onCustomWidgetResize() { if (window.Plotly) Plotly.Plots.resize(this._el); }
     onCustomWidgetDestroy() {}
 
-    onCustomWidgetAfterUpdate(changedProps) {
-      if (changedProps.properties)
-        Object.assign(this._props, changedProps.properties);
-
-      if (changedProps.dataBinding) {
-        this._dataBinding = changedProps.dataBinding;
-        try {
-          console.log("[SunburstDebug] dataBinding:", JSON.parse(JSON.stringify(this._dataBinding)));
-        } catch (e) {
-          console.log("[SunburstDebug] dataBinding (raw):", this._dataBinding);
-        }
+    onCustomWidgetAfterUpdate(changed) {
+      if (changed.properties) Object.assign(this._props, changed.properties);
+      if (changed.dataBinding) {
+        this._binding = changed.dataBinding;
+        try { console.log("[SunburstDebug] dataBinding:", JSON.parse(JSON.stringify(this._binding))); }
+        catch { console.log("[SunburstDebug] dataBinding (raw):", this._binding); }
       }
-
       this.render();
     }
 
     render() {
-      if (!this._dataBinding) {
-        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>Bind data to render</p>";
+      if (!this._binding) {
+        this._el.innerHTML = "<p style='text-align:center;color:#999;'>Bind data to render</p>";
+        return;
+      }
+      if (this._binding.state && this._binding.state !== "success") {
+        this._el.innerHTML = "<p style='text-align:center;color:#999;'>Loading data...</p>";
         return;
       }
 
-      if (this._dataBinding.state && this._dataBinding.state !== "success") {
-        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>Loading data...</p>";
-        return;
-      }
-
-      const model = this._normalizeBinding(this._dataBinding);
-      if (!model || !model.rows?.length || !model.dimLabels?.length) {
+      const model = this._normalizeBinding(this._binding);
+      if (!model || !model.rows?.length || !model.dimCount) {
         console.warn("[SunburstDebug] Unusable binding model:", model);
-        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>No usable data</p>";
+        this._el.innerHTML = "<p style='text-align:center;color:#999;'>No usable data</p>";
         return;
       }
 
-      // --- Build hierarchy ---
       const sep = "↳";
       const map = new Map();
-      const ensure = (arr) => {
-        const id = arr.join(sep);
+      const ensure = (path) => {
+        const id = path.join(sep);
         if (!map.has(id)) {
-          const label = arr[arr.length - 1] || "Total";
-          const parent = arr.length <= 1 ? "" : arr.slice(0, -1).join(sep);
+          const label = path[path.length - 1] || "Total";
+          const parent = path.length <= 1 ? "" : path.slice(0, -1).join(sep);
           map.set(id, { id, label, parent, val: 0 });
         }
         return map.get(id);
       };
 
       ensure(["Total"]);
-      for (const row of model.rows) {
-        const dims = row.dims;
-        const val = row.val;
+
+      for (const r of model.rows) {
+        const v = Number.isFinite(r.val) ? r.val : 0;
         let p = ["Total"];
-        ensure(p).val += val;
-        for (const d of dims) {
+        ensure(p).val += v;
+        for (const d of r.dims) {
           p = [...p, d];
-          ensure(p).val += val;
+          ensure(p).val += v;
         }
       }
 
-      // --- Plotly arrays ---
       const labels = [], parents = [], values = [], ids = [];
       for (const [, n] of map) {
         labels.push(n.label);
@@ -95,20 +87,19 @@
         ids.push(n.id);
       }
 
-      if (!window.Plotly) {
-        console.log("[SunburstDebug] Waiting for Plotly...");
-        setTimeout(() => this.render(), 100);
-        return;
-      }
+      if (!window.Plotly) { setTimeout(() => this.render(), 80); return; }
+
+      console.log("[SunburstDebug] nodes:", ids.length, "sum:", values.reduce((a,b)=>a+b,0));
 
       const trace = {
         type: "sunburst",
         labels, parents, values, ids,
         branchvalues: "total",
         marker: { line: { color: "#fff", width: 1 } },
-        textinfo: this._props.showLabels ? "label+value" : "none",
-        maxdepth: this._props.maxDepth || null
+        textinfo: this._props.showLabels ? "label+value" : "none"
       };
+      const md = Number(this._props.maxDepth);
+      if (Number.isFinite(md) && md > 0) trace.maxdepth = md;
 
       const layout = {
         margin: { l: 10, r: 10, t: 10, b: 10 },
@@ -120,17 +111,20 @@
         extendsunburstcolors: true
       };
 
-      Plotly.react(this._plot, [trace], layout, { displayModeBar: false, responsive: true });
+      Plotly.react(this._el, [trace], layout, { displayModeBar: false, responsive: true });
     }
 
-    /** Normalize the SAC binding that uses "dimensions_0", "measures_0" structure */
+    // ------- Binding Normalizer for your tenant shape -------
     _normalizeBinding(db) {
       if (!Array.isArray(db.data) || !db.data.length) return null;
 
       const rows = [];
+      let dimCount = 0;
+
       for (const r of db.data) {
         const dims = [];
         let val = 0;
+
         for (const k of Object.keys(r)) {
           if (k.startsWith("dimensions_")) {
             const v = r[k];
@@ -138,20 +132,28 @@
           }
           if (k.startsWith("measures_")) {
             const m = r[k];
-            if (m && typeof m === "object") val = Number(m.raw ?? m.formatted ?? 0);
+            if (m && typeof m === "object") {
+              // Try raw first
+              let n = Number(m.raw);
+              if (!Number.isFinite(n)) {
+                // Fallback to formatted like "€1,234.56"
+                const cleaned = String(m.formatted ?? "").replace(/[^\d.\-]/g, "");
+                n = parseFloat(cleaned);
+              }
+              if (!Number.isFinite(n)) n = 0;
+              val = n;
+            }
           }
         }
+
+        dimCount = Math.max(dimCount, dims.length);
         rows.push({ dims, val });
       }
 
-      // Derive dimension labels (for logging)
-      const firstRow = db.data[0];
-      const dimLabels = Object.keys(firstRow).filter(k => k.startsWith("dimensions_"));
-      console.log("[SunburstDebug] Parsed rows:", rows.length, "Dims:", dimLabels.length);
-
-      return { rows, dimLabels };
+      console.log(`[SunburstDebug] Parsed rows: ${rows.length} | Dims: ${dimCount}`);
+      return { rows, dimCount };
     }
   }
-//Version 4
+// Version 5
   customElements.define("com-sree-sac-sunburst-debug", SunburstDebug);
 })();
