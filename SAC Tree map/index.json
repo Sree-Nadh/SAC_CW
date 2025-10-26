@@ -1,0 +1,25 @@
+{
+  "id": "com.sree.sac.treemap",
+  "version": "1.0.0",
+  "name": "Treemap (Plotly)",
+  "newInstancePrefix": "Treemap",
+  "description": "Plotly Treemap with depth and tiling controls.",
+  "vendor": "SREE",
+  "webcomponents": [
+    { "kind": "main",   "tag": "com-sree-sac-treemap",           "url": "/main.js" },
+    { "kind": "styling","tag": "com-sree-sac-treemap-styling",   "url": "/styling.js" }
+  ],
+  "properties": {
+    "showLabels": { "type": "boolean", "default": true },
+    "maxDepth":   { "type": "integer", "default": 4 },
+    "tiling":     { "type": "string",  "default": "squarify" }
+  },
+  "dataBindings": {
+    "dataBinding": {
+      "feeds": [
+        { "id": "dimensions", "description": "Dimensions", "type": "dimension" },
+        { "id": "measures",   "description": "Measures",   "type": "mainStructureMember" }
+      ]
+    }
+  }
+}
