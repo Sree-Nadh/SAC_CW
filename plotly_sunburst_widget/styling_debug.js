@@ -4,7 +4,7 @@
     <style>:host{display:block;padding:8px;font:12px system-ui,sans-serif}</style>
     <div>
       <label><input id="labels" type="checkbox" checked> Show Labels</label><br>
-      <label>Max Depth: <input id="depth" type="number" min="0" step="1" value="0"></label><br>
+      <label>Max Depth: <input id="depth" type="number" min="0" step="1" value="4"></label><br>
       <button id="apply">Apply</button>
     </div>
   `;
@@ -17,20 +17,22 @@
     }
 
     onCustomWidgetAfterUpdate(properties) {
-      this.shadowRoot.getElementById("labels").checked = properties.showLabels ?? true;
-      this.shadowRoot.getElementById("depth").value = properties.maxDepth ?? 0;
+      const showLabels = properties.showLabels ?? true;
+      const maxDepth = properties.maxDepth ?? 4;
+      this.shadowRoot.getElementById("labels").checked = showLabels;
+      this.shadowRoot.getElementById("depth").value = maxDepth;
     }
 
     connectedCallback() {
       this.shadowRoot.getElementById("apply").addEventListener("click", () => {
         const props = {
           showLabels: this.shadowRoot.getElementById("labels").checked,
-          maxDepth: Number(this.shadowRoot.getElementById("depth").value || 0) // 0 => auto
+          maxDepth: Number(this.shadowRoot.getElementById("depth").value || 4) // 4 default
         };
         this.dispatchEvent(new CustomEvent("propertiesChanged", { detail: { properties: props } }));
       });
     }
   }
-// Version 2
+//Version 3
   customElements.define("com-sree-sac-sunburst-debug-styling", Styling);
 })();
