@@ -23,7 +23,6 @@
       }
     }
 
-    // --- SAC lifecycle ---
     onCustomWidgetBeforeUpdate() {}
     onCustomWidgetResize() { this.render(); }
     onCustomWidgetDestroy() {}
@@ -44,30 +43,25 @@
       this.render();
     }
 
-    // --- Rendering logic ---
     render() {
-      // No binding at all
       if (!this._dataBinding) {
         this._plot.innerHTML = "<p style='text-align:center;color:#999;'>Bind data to render</p>";
         return;
       }
 
-      // Skip if SAC is still loading data
       if (this._dataBinding.state && this._dataBinding.state !== "success") {
-        console.log("[SunburstDebug] Waiting for data, current state:", this._dataBinding.state);
         this._plot.innerHTML = "<p style='text-align:center;color:#999;'>Loading data...</p>";
         return;
       }
 
-      // Normalize SAC binding to usable format
       const model = this._normalizeBinding(this._dataBinding);
-      if (!model || !model.rows?.length || !model.dimIds?.length || !model.measureId) {
+      if (!model || !model.rows?.length || !model.dimLabels?.length) {
         console.warn("[SunburstDebug] Unusable binding model:", model);
-        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>No data or unknown format</p>";
+        this._plot.innerHTML = "<p style='text-align:center;color:#999;'>No usable data</p>";
         return;
       }
 
-      // Build hierarchy
+      // --- Build hierarchy ---
       const sep = "↳";
       const map = new Map();
       const ensure = (arr) => {
@@ -82,17 +76,17 @@
 
       ensure(["Total"]);
       for (const row of model.rows) {
-        const dims = model.dimIds.map(h => String(row[h] ?? "(blank)"));
-        const v = Number(row[model.measureId]) || 0;
+        const dims = row.dims;
+        const val = row.val;
         let p = ["Total"];
-        ensure(p).val += v;
+        ensure(p).val += val;
         for (const d of dims) {
           p = [...p, d];
-          ensure(p).val += v;
+          ensure(p).val += val;
         }
       }
 
-      // Convert to Plotly arrays
+      // --- Plotly arrays ---
       const labels = [], parents = [], values = [], ids = [];
       for (const [, n] of map) {
         labels.push(n.label);
@@ -112,7 +106,8 @@
         labels, parents, values, ids,
         branchvalues: "total",
         marker: { line: { color: "#fff", width: 1 } },
-        textinfo: this._props.showLabels ? "label+value" : "none"
+        textinfo: this._props.showLabels ? "label+value" : "none",
+        maxdepth: this._props.maxDepth || null
       };
 
       const layout = {
@@ -125,55 +120,38 @@
         extendsunburstcolors: true
       };
 
-      if (Number(this._props.maxDepth) > 0)
-        trace.maxdepth = Number(this._props.maxDepth);
-
-      Plotly.react(this._plot, [trace], layout, {
-        displayModeBar: false,
-        responsive: true
-      });
+      Plotly.react(this._plot, [trace], layout, { displayModeBar: false, responsive: true });
     }
 
-    // --- Binding Normalizer ---
+    /** Normalize the SAC binding that uses "dimensions_0", "measures_0" structure */
     _normalizeBinding(db) {
-      // Simple format: top-level dimensions + measures + data
-      if (db.dimensions?.length && db.measures?.length && Array.isArray(db.data)) {
-        if (db.data.length && typeof db.data[0] === "object" && !Array.isArray(db.data[0])) {
-          return {
-            rows: db.data,
-            dimIds: db.dimensions.map(d => d.id ?? d.name ?? d.key).filter(Boolean),
-            measureId: db.measures[0].id ?? db.measures[0].name ?? db.measures[0].key
-          };
+      if (!Array.isArray(db.data) || !db.data.length) return null;
+
+      const rows = [];
+      for (const r of db.data) {
+        const dims = [];
+        let val = 0;
+        for (const k of Object.keys(r)) {
+          if (k.startsWith("dimensions_")) {
+            const v = r[k];
+            if (v && typeof v === "object") dims.push(v.label ?? v.id ?? "");
+          }
+          if (k.startsWith("measures_")) {
+            const m = r[k];
+            if (m && typeof m === "object") val = Number(m.raw ?? m.formatted ?? 0);
+          }
         }
+        rows.push({ dims, val });
       }
 
-      // Metadata format
-      if (db.metadata?.dimensions?.length && db.metadata?.measures?.length && Array.isArray(db.data)) {
-        const dimIds = db.metadata.dimensions.map(d => d.id ?? d.name ?? d.key).filter(Boolean);
-        const measureId = db.metadata.measures[0]?.id ?? db.metadata.measures[0]?.name ?? db.metadata.measures[0]?.key;
-        if (!dimIds.length || !measureId) return null;
+      // Derive dimension labels (for logging)
+      const firstRow = db.data[0];
+      const dimLabels = Object.keys(firstRow).filter(k => k.startsWith("dimensions_"));
+      console.log("[SunburstDebug] Parsed rows:", rows.length, "Dims:", dimLabels.length);
 
-        // Object rows
-        if (db.data.length && typeof db.data[0] === "object" && !Array.isArray(db.data[0])) {
-          return { rows: db.data, dimIds, measureId };
-        }
-
-        // Array rows
-        if (db.data.length && Array.isArray(db.data[0])) {
-          const headers = [...dimIds, measureId];
-          const rows = db.data.map(arr => {
-            const o = {};
-            for (let i = 0; i < headers.length && i < arr.length; i++) o[headers[i]] = arr[i];
-            return o;
-          });
-          return { rows, dimIds, measureId };
-        }
-      }
-
-      console.warn("[SunburstDebug] Unhandled binding shape:", db);
-      return null;
+      return { rows, dimLabels };
     }
   }
-//Version 3
+//Version 4
   customElements.define("com-sree-sac-sunburst-debug", SunburstDebug);
 })();
