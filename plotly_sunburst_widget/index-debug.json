@@ -1,0 +1,46 @@
+{
+  "id": "com.sree.sac.sunburst.debug",
+  "version": "1.0.0",
+  "name": "Sunburst (Debug)",
+  "newInstancePrefix": "SunburstDebug",
+  "description": "Debug version of Sunburst chart using Plotly to inspect SAC data binding.",
+  "vendor": "SREE",
+  "webcomponents": [
+    {
+      "kind": "main",
+      "tag": "com-sree-sac-sunburst-debug",
+      "url": "/main.js"
+    },
+    {
+      "kind": "styling",
+      "tag": "com-sree-sac-sunburst-debug-styling",
+      "url": "/styling.js"
+    }
+  ],
+  "properties": {
+    "showLabels": {
+      "type": "boolean",
+      "default": true
+    },
+    "maxDepth": {
+      "type": "integer",
+      "default": 0
+    }
+  },
+  "dataBindings": {
+    "dataBinding": {
+      "feeds": [
+        {
+          "id": "dimensions",
+          "description": "Dimensions",
+          "type": "dimension"
+        },
+        {
+          "id": "measures",
+          "description": "Measures",
+          "type": "mainStructureMember"
+        }
+      ]
+    }
+  }
+}
